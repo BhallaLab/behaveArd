@@ -2,6 +2,7 @@ import curses
 import struct
 import serial
 import time
+import argparse
 
 IN_DATA_LEN = 10 # bytes
 TIMEOUT = 1.1
@@ -182,6 +183,14 @@ def draw_full_line( color, stdscr ):
 #################################################################
 
 def main():
+    ''' This program controls an arduino which performs precise timing for
+    a mouse behavioural protocol. There is also an ncurses interface to see
+    what is going on with the hardware events and the animal's movement.
+    '''
+    parser = argparse.ArgumentParser( description = 'behave.py: A program to control mouse behaviour on arduino.' )
+    parser.add_argument('-p', '--protocol', type = str, help = "Optional: Specify which protocol of light, sound, multics or oddball. Default: sound.", default = "sound" )
+    args = parser.parse_args()
+
     stdscr = curses.initscr()
     curses.noecho()
     curses.cbreak()
@@ -193,7 +202,16 @@ def main():
     curses.init_pair(1, curses.COLOR_RED, curses.COLOR_BLACK)
     curses.init_pair(2, curses.COLOR_GREEN, curses.COLOR_BLACK)
 
-    protocolParms = OddballParms
+    if args.protocol == "oddball":
+        protocolParms = OddballParms
+    else:
+        protocolParms = dict(TECParms)
+        if args.protocol == "light":
+            protocolParms["PROTOCOL"] = LIGHTTRACE
+        if args.protocol == "sound":
+            protocolParms["PROTOCOL"] = LIGHTTRACE
+        if args.protocol == "multics":
+            protocolParms["PROTOCOL"] = MULTITRACE
 
     numTrials = 1
     currTrial = 0
