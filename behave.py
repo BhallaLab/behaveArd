@@ -8,7 +8,7 @@ TIMEOUT = 1.1
 STARTFLAG = 0x9876
 BAUDRATE = 9600
 PORT = "/dev/ttyUSB0"  # Replace with your Arduino's port
-HEADERS = ["Short 1", "Short 2", "Short 3", "F 1", "F 2", "F 3", "F 4", "F 5", "F 6", "F 7", "F 8", "F 9", "F 10"]
+HEADERS = ["State  ", "Loop T ", "Total T", "TR0", "TR1", "LED", "TON", "Odd", "BG ", "Ton", "2P ", "Puf", "CaM "]
 FIELDS = {
     "Trial number": 0,
     "State": "Initial",
@@ -63,7 +63,7 @@ def decodeIncomingData(data):
     Decodes the digital input values from the received data.
     Args: data: The received data as a bytes_array.
     Data contents: ['D', protocolState, digitalValues, millis ]
-    Returns: A list of digital input values (0 or 1).
+    #return [protocol_state, time_elapsed_in_loop, millis_value, digital_values = [tread0, tread1, light, toneCpy, ob_LED, bg_LED, tone, uscope, puff, camera]]
     """
     numDigitalInputs = 9
     assert( len( data ) >= numDigitalInputs )
@@ -112,10 +112,26 @@ paramIdx = { pp:idx for idx, pp in enumerate( params )}
 #"LIGHTDUR":7,
 defaultParms = {
         "PROTOCOL": SOUNDTRACE, "RECORDSTART": 500, "RECORDDUR": 1000, 
-        "TDUR": 1000, "INITDELAY": 1000, 
+        "TDUR": 2500, "INITDELAY": 1000, 
         "BGFREQ": 5000, "OBFREQ": 1000, "BGDUR": 50, "OBDUR":50, "OBPOS":6,
         "PUFFDUR": 50, "ISI": 250, "ITI": 1000, 
         "TONENUMS": 1, "UPDATEINTERVAL": 2
+}
+
+TECParms = {
+        "PROTOCOL": SOUNDTRACE, "RECORDSTART": 500, "RECORDDUR": 1000, 
+        "TDUR": 2500, "INITDELAY": 1000, 
+        "BGFREQ": 5000, "OBFREQ": 1000, "BGDUR": 50, "OBDUR":50, "OBPOS":6,
+        "PUFFDUR": 50, "ISI": 250, "ITI": 1000, 
+        "TONENUMS": 1, "UPDATEINTERVAL": 2
+}
+
+OddballParms = {
+        "PROTOCOL": GAP, "RECORDSTART": 10000, "RECORDDUR": 10000, 
+        "TDUR": 20000, "INITDELAY": 500, 
+        "BGFREQ": 5000, "OBFREQ": 1000, "BGDUR": 50, "OBDUR":50, "OBPOS":16,
+        "PUFFDUR": 50, "ISI": 1000, "ITI": 1000, 
+        "TONENUMS": 20, "UPDATEINTERVAL": 2
 }
 
 # Contents of values from Arduino. 10 bytes if data, else 1 byte.
@@ -177,8 +193,11 @@ def main():
     curses.init_pair(1, curses.COLOR_RED, curses.COLOR_BLACK)
     curses.init_pair(2, curses.COLOR_GREEN, curses.COLOR_BLACK)
 
-    numTrials = 6
+    protocolParms = OddballParms
+
+    numTrials = 1
     currTrial = 0
+    probeTrial = -1
     trialRet = [[]]*numTrials
     contents = []
 
@@ -198,7 +217,7 @@ def main():
     arduino.reset_input_buffer()  # Flush the input buffer
     arduino.reset_output_buffer()  # Flush the output buffer
     
-    for key, val in defaultParms.items():
+    for key, val in protocolParms.items():
         arduinoSend( arduino, paramIdx[key], val )
     print( "SENT ALL PARAMS" )
     arduinoSend(arduino, paramIdx["RUNCONTROL"], START )
@@ -221,6 +240,10 @@ def main():
                 if ret[3] == 0:
                     draw_full_line( 1, stdscr )
                     if currTrial < numTrials:
+                        if currTrial == probeTrial:
+                            arduinoSend(arduino, paramIdx["PROTOCOL"], SOUNDPROBE )
+                        else:
+                            arduinoSend(arduino, paramIdx["PROTOCOL"], SOUNDTRACE )
                         arduinoSend(arduino, paramIdx["RUNCONTROL"], START )
                         #print( "Completed Trial ", currTrial )
                         running = False
@@ -237,6 +260,13 @@ def main():
     fields["Status" ] = "Finished"
     draw_fields( fields, stdscr )
     stdscr.refresh()
+    ############### Go into control mode #################
+    running = True
+    while running:
+        key = stdscr.getch()
+        if key == ord('q'):
+            running = False
+        time.sleep( 0.5 )
 
     ############### Clean up after #################
     curses.endwin()

@@ -177,7 +177,7 @@ void gapProtocol( unsigned long dt ) {
       		digitalWrite(bg_LED, LOW);      // Turn off background LED
       		digitalWrite(ob_LED, LOW);      // Turn off oddball LED
       		digitalWrite(tone_copy, LOW);   // Turn off tone copy
-			protocolState = STATE_PRE;
+			protocolState = STATE_POST;
 			lastTone = isToneOn;
 		}
 	} else {
@@ -194,7 +194,7 @@ void gapProtocol( unsigned long dt ) {
       		digitalWrite(bg_LED, LOW);      // Turn off background LED
       		digitalWrite(ob_LED, LOW);      // Turn off oddball LED
       		digitalWrite(tone_copy, LOW);   // Turn off tone copy
-			protocolState = STATE_PRE;
+			protocolState = STATE_POST;
 			lastTone = isToneOn;
 		}
 	}
@@ -313,7 +313,7 @@ void setup() {
 	dataTemp[PROTOCOL] = 1; 	// GAP=0, SOUND: 1, LIGHT: 2, MULTI: 3
 	dataTemp[RECORDSTART] = 500;// Time to start recording
 	dataTemp[RECORDDUR] = 1000; // Duration of recording.
-	dataTemp[TDUR] = 2000;		// Trial duration (ms)
+	dataTemp[TDUR] = 2500;		// Trial duration (ms)
 	dataTemp[INITDELAY] = 1000; // Initial delay before stimulus (ms)
 	dataTemp[BGFREQ] = 5000;    // Background frequency (Hz)
 	dataTemp[OBFREQ] = 1000;    // Oddball frequency (Hz)
@@ -323,7 +323,7 @@ void setup() {
 	dataTemp[PUFFDUR] = 10; 	// Air puff duration (ms)
 	dataTemp[ISI] = 250; 		// Inter-stimulus interval (ms) OR: TRACEDUR
 	dataTemp[ITI] = 1000; 		// Inter-trial interval (ms)
-	dataTemp[TONENUMS] = 20; 	// Number of tones to play
+	dataTemp[TONENUMS] = 10; 	// Number of tones to play
 	dataTemp[UPDATEINTERVAL] = 2; 	// Interval to update pin states
 	// Initialize pins for input and output
 	for (int i = 0; i < sizeof(digitalInputs) / sizeof(digitalInputs[0]); i++) {
