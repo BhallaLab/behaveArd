@@ -75,7 +75,7 @@ const int allDigitalPins[] = {tread0, tread1, lightpin, tone_copy, ob_LED, bg_LE
 // Here are a set of globals that define the experiment state
 static byte protocolState = STATE_PRE;
 static byte oldbytes[10];
-static bool isTrial = true;
+static bool isTrial = false;
 
 
 // The dataTemp array defines the experiment parameters
@@ -92,8 +92,8 @@ void sendToHost( unsigned short timeElapsedInLoop ) {
 	*digitalValues = 0;
 	// Digital pins 0 and 1 may be for tx and recv, use for isTrial flag
 	if (isTrial)
-		 *digitalValues |= 0x01;
-	for (int i = 2; i < sizeof(allDigitalPins) / sizeof(allDigitalPins[0]); i++) {
+		 *digitalValues |= 1 << sizeof( allDigitalPins );
+	for (int i = 0; i < sizeof(allDigitalPins) / sizeof(allDigitalPins[0]); i++) {
 		*digitalValues |= digitalRead(allDigitalPins[i]) << i;
   	}
 	*((unsigned short*)(bytes+4)) = timeElapsedInLoop;
@@ -309,7 +309,7 @@ boolean doTrial( unsigned long startTime ) {
 
 /////////////////////////////////////////////////////////////////////
 void setup() {
-	dataTemp[RUNCONTROL] = 1;	// STOP: 0. START: 1. CONTINUE: 2. RESET: 3
+	dataTemp[RUNCONTROL] = 0;	// STOP: 0. START: 1. CONTINUE: 2. RESET: 3
 	dataTemp[PROTOCOL] = 1; 	// GAP=0, SOUND: 1, LIGHT: 2, MULTI: 3
 	dataTemp[RECORDSTART] = 500;// Time to start recording
 	dataTemp[RECORDDUR] = 1000; // Duration of recording.
@@ -349,6 +349,9 @@ void loop() {
   			sendToHost( (unsigned short)( millis() - currTime ) );
 		}
 		if ( recvFromHost( receivedShorts ) ) {
+			if ( receivedShorts[1] < nParams ) {
+				dataTemp[receivedShorts[1]] = receivedShorts[2];
+			}
 			if (receivedShorts[1] == RUNCONTROL) {
 				if (dataTemp[RUNCONTROL] == START) {
 					isTrial = true;

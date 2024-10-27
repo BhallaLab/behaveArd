@@ -9,7 +9,7 @@ TIMEOUT = 1.1
 STARTFLAG = 0x9876
 BAUDRATE = 9600
 PORT = "/dev/ttyUSB0"  # Replace with your Arduino's port
-HEADERS = ["State  ", "Loop T ", "Total T", "TR0", "TR1", "LED", "TON", "Odd", "BG ", "Ton", "2P ", "Puf", "CaM "]
+HEADERS = ["State  ", "Loop T ", "Total T", "TR0", "TR1", "LED", "TON", "Odd", "BG ", "Ton", "Puf ", "2p ", "CaM "]
 FIELDS = {
     "Trial number": 0,
     "State": "Initial",
@@ -35,11 +35,12 @@ def arduinoSend( ser, key, value ):
     t0 = time.time()
     while (time.time() - t0) < TIMEOUT:
         ser.write(packed_data)
-        time.sleep( 0.04 )
+        time.sleep( 0.05 )
         while ser.in_waiting:  # Check for ack
             ret = ser.read()
             #print( "RET = ", ret )
             if ret == b'R':
+                time.sleep( 0.05 )
                 return
     print( "TIMEOUT on arduinoSend. Bad news. Quitting." )
     quit()
@@ -55,6 +56,8 @@ def arduinoRead(ser):
                 return data
             except serial.SerialTimeoutException:
                 print( "FAILED serial read", flush = True )
+        elif ret == b'R': # This is an ack package saying data received
+            return None
         else:
             print( "bad return ", ret )
     return None
@@ -66,8 +69,8 @@ def decodeIncomingData(data):
     Data contents: ['D', protocolState, digitalValues, millis ]
     #return [protocol_state, time_elapsed_in_loop, millis_value, digital_values = [tread0, tread1, light, toneCpy, ob_LED, bg_LED, tone, uscope, puff, camera]]
     """
-    numDigitalInputs = 9
-    assert( len( data ) >= numDigitalInputs )
+    numDigitalInputs = 11
+    assert( len( data ) >= (IN_DATA_LEN - 1) )
     protocol_state = int(data[0])
     digital_values = int.from_bytes(data[1:3], byteorder='little')
     time_elapsed_in_loop = int.from_bytes(data[3:5], byteorder='little')
@@ -77,16 +80,6 @@ def decodeIncomingData(data):
     for i in range(numDigitalInputs):
         digitalInputs.append((digital_values >> i) & 1)
     return digitalInputs
-
-def display_data(stdscr, digital_inputs, analog_inputs):
-    stdscr.clear()
-    stdscr.addstr(1, 1, "Digital Inputs:")
-    for i, value in enumerate(digital_inputs):
-        stdscr.addstr(2 + i, 1, f"Input {i+1}: {value}")
-    stdscr.addstr(1, 30, "Analog Inputs:")
-    for i, value in enumerate(analog_inputs):
-        stdscr.addstr(2 + i, 30, f"Input {i+1}: {value}")
-    stdscr.refresh()
 
 GAP = int(0)
 SOUNDTRACE = int(1)
@@ -108,16 +101,6 @@ params = ["RUNCONTROL", "PROTOCOL", "RECORDSTART", "RECORDDUR", "TDUR",
     "INITDELAY", "BGFREQ", "OBFREQ", "BGDUR", "OBDUR", "OBPOS", "PUFFDUR",
     "ISI", "ITI", "TONENUMS", "UPDATEINTERVAL"]
 paramIdx = { pp:idx for idx, pp in enumerate( params )}
-#"TONEDUR":6,
-# ISI == TRACE interval
-#"LIGHTDUR":7,
-defaultParms = {
-        "PROTOCOL": SOUNDTRACE, "RECORDSTART": 500, "RECORDDUR": 1000, 
-        "TDUR": 2500, "INITDELAY": 1000, 
-        "BGFREQ": 5000, "OBFREQ": 1000, "BGDUR": 50, "OBDUR":50, "OBPOS":6,
-        "PUFFDUR": 50, "ISI": 250, "ITI": 1000, 
-        "TONENUMS": 1, "UPDATEINTERVAL": 2
-}
 
 TECParms = {
         "PROTOCOL": SOUNDTRACE, "RECORDSTART": 500, "RECORDDUR": 1000, 
@@ -138,7 +121,7 @@ OddballParms = {
 # Contents of values from Arduino. 10 bytes if data, else 1 byte.
 # byte 0: Type of data. Either D for data, R for received, or E for error.
 # byte 1: Protocol state. One of PRE, CS, TRACE, US, POST, ODDBALL.
-# byte 2,3: State of all digital inputs, also state of isTrial in 0x0001.
+# byte 2,3: State of all digital inputs, also state of isTrial in bit 11.
 # byte 4,5: Time elapsed in loop, in ms.
 # byte 6-9: millis.
 
@@ -182,15 +165,7 @@ def draw_full_line( color, stdscr ):
 
 #################################################################
 
-def main():
-    ''' This program controls an arduino which performs precise timing for
-    a mouse behavioural protocol. There is also an ncurses interface to see
-    what is going on with the hardware events and the animal's movement.
-    '''
-    parser = argparse.ArgumentParser( description = 'behave.py: A program to control mouse behaviour on arduino.' )
-    parser.add_argument('-p', '--protocol', type = str, help = "Optional: Specify which protocol of light, sound, multics or oddball. Default: sound.", default = "sound" )
-    args = parser.parse_args()
-
+def initCurses():
     stdscr = curses.initscr()
     curses.noecho()
     curses.cbreak()
@@ -201,32 +176,9 @@ def main():
     curses.start_color()
     curses.init_pair(1, curses.COLOR_RED, curses.COLOR_BLACK)
     curses.init_pair(2, curses.COLOR_GREEN, curses.COLOR_BLACK)
+    return stdscr
 
-    if args.protocol == "oddball":
-        protocolParms = OddballParms
-    else:
-        protocolParms = dict(TECParms)
-        if args.protocol == "light":
-            protocolParms["PROTOCOL"] = LIGHTTRACE
-        if args.protocol == "sound":
-            protocolParms["PROTOCOL"] = LIGHTTRACE
-        if args.protocol == "multics":
-            protocolParms["PROTOCOL"] = MULTITRACE
-
-    numTrials = 1
-    currTrial = 0
-    probeTrial = -1
-    trialRet = [[]]*numTrials
-    contents = []
-
-    fields = {
-        "Trial number": 0,
-        "State": "Initial",
-        "Score": 0,
-        "Elapsed Time": 0,
-        "Status": "Ready"
-    }
-
+def initArduino( protocolParms ):
     arduino = connect_to_arduino(PORT, BAUDRATE)
     if not arduino:
         print( "Failed to open arduino. Quitting.")
@@ -237,45 +189,97 @@ def main():
     
     for key, val in protocolParms.items():
         arduinoSend( arduino, paramIdx[key], val )
-    print( "SENT ALL PARAMS" )
+    print( "SENT ALL PARAMS", flush = True )
+    time.sleep(1)
+    return arduino
+
+def runTrial( currTrial, stdscr, arduino, fields ):
+    contents = []
+    running = True
+    while running:
+        key = stdscr.getch()
+        if key == ord('q'):
+            return 1, contents
+        if key == ord(' '):
+            draw_full_line( 2, stdscr )
+            stdscr.refresh()
+            time.sleep( 0.5 )
+            draw_full_line( 0, stdscr )
+        data = arduinoRead(arduino)
+        if data:
+            ret = decodeIncomingData( data )
+            contents.append(ret)  # Put in the data
+            draw_table( contents, stdscr )
+            fields["Elapsed Time" ] = ret[2]/1000
+            fields["State" ] = ret[1]
+            fields["Status" ] = "Running"
+            draw_fields( fields, stdscr )
+            stdscr.refresh()
+            #print( ret )
+            if ret[-1] == 0:
+                return 0, contents
+
+def main():
+    ''' This program controls an arduino which performs precise timing for
+    a mouse behavioural protocol. There is also an ncurses interface to see
+    what is going on with the hardware events and the animal's movement.
+    '''
+    parser = argparse.ArgumentParser( description = 'behave.py: A program to control mouse behaviour on arduino.' )
+    parser.add_argument('-p', '--protocol', type = str, help = "Optional: Specify which protocol of light, sound, multics or oddball. Default: sound.", default = "sound" )
+    args = parser.parse_args()
+
+
+    if args.protocol == "oddball":
+        protocolParms = OddballParms
+        numTrials = 1
+        probeTrial = -1
+    else:
+        protocolParms = dict(TECParms)
+        numTrials = 5
+        probeTrial = 3
+        if args.protocol == "light":
+            protocolParms["PROTOCOL"] = LIGHTTRACE
+        if args.protocol == "sound":
+            protocolParms["PROTOCOL"] = SOUNDTRACE
+        if args.protocol == "multics":
+            protocolParms["PROTOCOL"] = MULTITRACE
+
+    arduino = initArduino( protocolParms )
+    stdscr = initCurses()
+
+    currTrial = 0
+    trialRet = []
+
+    fields = {
+        "Trial number": 0,
+        "State": "Initial",
+        "Score": 0,
+        "Elapsed Time": 0,
+        "Status": "Ready"
+    }
+
     arduinoSend(arduino, paramIdx["RUNCONTROL"], START )
     for currTrial in range( numTrials ):
-        running = True
-        while running:
-            data = arduinoRead(arduino)
-            if data:
-                ret = decodeIncomingData( data )
-                trialRet[currTrial].append( ret )
-                contents.append(ret)  # Put in the data
-                draw_table( contents, stdscr )
-                fields["Trial number"] = currTrial
-                fields["Elapsed Time" ] = ret[1]/1000
-                fields["State" ] = ret[1]
+        fields["Trial number"] = currTrial
+        flag, contents = runTrial( currTrial, stdscr, arduino, fields )
+        if flag == 0: # Ended trial OK
+            trialRet.append( contents )
+            draw_full_line( 1, stdscr )
+            if currTrial < numTrials:
                 fields["Status" ] = "Running"
-                draw_fields( fields, stdscr )
-                stdscr.refresh()
-                #print( ret )
-                if ret[3] == 0:
-                    draw_full_line( 1, stdscr )
-                    if currTrial < numTrials:
-                        if currTrial == probeTrial:
-                            arduinoSend(arduino, paramIdx["PROTOCOL"], SOUNDPROBE )
-                        else:
-                            arduinoSend(arduino, paramIdx["PROTOCOL"], SOUNDTRACE )
-                        arduinoSend(arduino, paramIdx["RUNCONTROL"], START )
-                        #print( "Completed Trial ", currTrial )
-                        running = False
+                if currTrial == probeTrial:
+                    arduinoSend(arduino, paramIdx["PROTOCOL"], SOUNDPROBE )
+                else:
+                    arduinoSend(arduino, paramIdx["PROTOCOL"], SOUNDTRACE )
+                #time.sleep( 0.1 )
+                arduinoSend(arduino, paramIdx["RUNCONTROL"], START )
+                #time.sleep( 0.1 )
+            else:
+                fields["Status" ] = "Finished"
+        else:
+            fields["Status" ] = "Halted"
+            break;
 
-            key = stdscr.getch()
-            if key == ord('q'):
-                running = False
-            if key == ord(' '):
-                draw_full_line( 2, stdscr )
-                stdscr.refresh()
-                time.sleep( 0.5 )
-                draw_full_line( 0, stdscr )
-
-    fields["Status" ] = "Finished"
     draw_fields( fields, stdscr )
     stdscr.refresh()
     ############### Go into control mode #################
@@ -291,3 +295,15 @@ def main():
 
 if __name__ == "__main__":
     main()
+
+'''
+def display_data(stdscr, digital_inputs, analog_inputs):
+    stdscr.clear()
+    stdscr.addstr(1, 1, "Digital Inputs:")
+    for i, value in enumerate(digital_inputs):
+        stdscr.addstr(2 + i, 1, f"Input {i+1}: {value}")
+    stdscr.addstr(1, 30, "Analog Inputs:")
+    for i, value in enumerate(analog_inputs):
+        stdscr.addstr(2 + i, 30, f"Input {i+1}: {value}")
+    stdscr.refresh()
+'''
