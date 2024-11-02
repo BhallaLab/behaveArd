@@ -65,17 +65,20 @@ const int lightpin = 4;  	// Pin for CS2
 // INPUT PINS
 const int tread0 = 2;
 const int tread1 = 3;
+const int sync2p = 9;
 
 // Define pin numbers for digital inputs, analog inputs, and digital outputs
-const int digitalInputs[] = {tread0, tread1};
+const int digitalInputs[] = {tread0, tread1, sync2p};
 const int analogInputs[] = {A0, A1, A2};
-const int digitalOutputs[] = {lightpin, tone_copy, ob_LED, bg_LED, tonepin, puffpin, scope_pin, camera_pin};
-const int allDigitalPins[] = {tread0, tread1, lightpin, tone_copy, ob_LED, bg_LED, tonepin, puffpin, scope_pin, camera_pin};
+const int digitalOutputs[] = {lightpin, tone_copy, ob_LED, bg_LED, puffpin, scope_pin, camera_pin};
+const int allDigitalPins[] = {tread0, tread1, sync2p, lightpin, tone_copy, ob_LED, bg_LED, puffpin, scope_pin, camera_pin};
+const int numPins  = sizeof( allDigitalPins ) / sizeof( allDigitalPins[0] );
 
 // Here are a set of globals that define the experiment state
 static byte protocolState = STATE_PRE;
 static byte oldbytes[10];
 static bool isTrial = false;
+static unsigned long nextt = 0;
 
 
 // The dataTemp array defines the experiment parameters
@@ -92,8 +95,8 @@ void sendToHost( unsigned short timeElapsedInLoop ) {
 	*digitalValues = 0;
 	// Digital pins 0 and 1 may be for tx and recv, use for isTrial flag
 	if (isTrial)
-		 *digitalValues |= 1 << sizeof( allDigitalPins );
-	for (int i = 0; i < sizeof(allDigitalPins) / sizeof(allDigitalPins[0]); i++) {
+		 *digitalValues |= 1 << numPins;
+	for (int i = 0; i < numPins; i++) {
 		*digitalValues |= digitalRead(allDigitalPins[i]) << i;
   	}
 	*((unsigned short*)(bytes+4)) = timeElapsedInLoop;
@@ -169,6 +172,7 @@ void gapProtocol( unsigned long dt ) {
 		if (isToneOn && (isToneOn != lastTone)) {
         	digitalWrite(bg_LED, LOW);    // Turn off background LED
         	digitalWrite(ob_LED, HIGH);     // Turn on oddball LED
+			noTone(tonepin);                // Stop the tone
         	digitalWrite(tone_copy, LOW); // Turn off tone copy
 			protocolState = STATE_ODDBALL;
 			lastTone = isToneOn;
@@ -176,15 +180,16 @@ void gapProtocol( unsigned long dt ) {
 		if (!isToneOn && (isToneOn != lastTone)) {
       		digitalWrite(bg_LED, LOW);      // Turn off background LED
       		digitalWrite(ob_LED, LOW);      // Turn off oddball LED
+			noTone(tonepin);                // Stop the tone
       		digitalWrite(tone_copy, LOW);   // Turn off tone copy
 			protocolState = STATE_POST;
 			lastTone = isToneOn;
 		}
 	} else {
 		if (isToneOn && (isToneOn != lastTone)) {
-        	tone(tonepin, dataTemp[BGFREQ]);// Play background freq tone
         	digitalWrite(bg_LED, HIGH);    // Turn on background LED
         	digitalWrite(ob_LED, LOW);     // Turn off oddball LED
+        	tone(tonepin, dataTemp[BGFREQ]);// Play background freq tone
         	digitalWrite(tone_copy, HIGH); // Turn on tone copy
 			protocolState = STATE_CS;
 			lastTone = isToneOn;
@@ -201,7 +206,6 @@ void gapProtocol( unsigned long dt ) {
 }
 
 void TECProtocol( unsigned long dt, bool isTone, bool isProbe ) {
-	static unsigned long nextt = 0;
 	switch (protocolState ) {
 		case STATE_PRE:
 			if (dt > dataTemp[INITDELAY]) {
@@ -276,16 +280,16 @@ boolean doTrial( unsigned long startTime ) {
 			gapProtocol( dt );
 			break;
 		case PROTOCOL_LIGHTTRACE:
-			TECProtocol( dt, false, false  );	// dt, isTone, isProbe
+			TECProtocol( dt, false, false ); // dt, isTone, isProbe
 			break;
 		case PROTOCOL_LIGHTPROBE:
-			TECProtocol( dt, false, true  );	// dt, isTone, isProbe
+			TECProtocol( dt, false, true  ); // dt, isTone, isProbe
 			break;
 		case PROTOCOL_SOUNDTRACE:
-			TECProtocol( dt, true, false  );	// dt, isTone, isProbe
+			TECProtocol( dt, true, false  ); // dt, isTone, isProbe
 			break;
 		case PROTOCOL_SOUNDPROBE:
-			TECProtocol( dt, true, true  );		// dt, isTone, isProbe
+			TECProtocol( dt, true, true  ); // dt, isTone, isProbe
 			break;
 		case PROTOCOL_MULTITRACE:
 			multiTraceProtocol( dt );
@@ -301,9 +305,9 @@ boolean doTrial( unsigned long startTime ) {
 	}
 	if ( dt > dataTemp[TDUR] ) {
 		protocolState = STATE_PRE;
-		isTrial = false;
+		return false;	// Used later for isTrail flag
 	}
-	return isTrial;
+	return true;	// Used later for isTrail flag
 }
 
 
@@ -313,7 +317,7 @@ void setup() {
 	dataTemp[PROTOCOL] = 1; 	// GAP=0, SOUND: 1, LIGHT: 2, MULTI: 3
 	dataTemp[RECORDSTART] = 500;// Time to start recording
 	dataTemp[RECORDDUR] = 1000; // Duration of recording.
-	dataTemp[TDUR] = 2500;		// Trial duration (ms)
+	dataTemp[TDUR] = 100;		// Trial duration (ms)
 	dataTemp[INITDELAY] = 1000; // Initial delay before stimulus (ms)
 	dataTemp[BGFREQ] = 5000;    // Background frequency (Hz)
 	dataTemp[OBFREQ] = 1000;    // Oddball frequency (Hz)
@@ -338,7 +342,6 @@ void setup() {
 
 void loop() {
 	static unsigned long trialStartTime = 0;
-	static unsigned long trialEndTime = 0;
 	static unsigned long nextUpdateTime = 0;
 	uint16_t receivedShorts[3] = {0,0,0};
 	unsigned long currTime = millis();
@@ -355,8 +358,9 @@ void loop() {
 			if (receivedShorts[1] == RUNCONTROL) {
 				if (dataTemp[RUNCONTROL] == START) {
 					isTrial = true;
+					nextt = 0;
+					protocolState = STATE_PRE;
 					trialStartTime = millis();
-					trialEndTime = trialStartTime + dataTemp[TDUR];
 				} else if (dataTemp[RUNCONTROL] == STOP) {
 			 		isTrial = false;
 					protocolState = STATE_PRE;

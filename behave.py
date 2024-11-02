@@ -2,6 +2,7 @@ import curses
 import struct
 import serial
 import time
+import numpy as np
 import argparse
 
 IN_DATA_LEN = 10 # bytes
@@ -9,7 +10,8 @@ TIMEOUT = 1.1
 STARTFLAG = 0x9876
 BAUDRATE = 9600
 PORT = "/dev/ttyUSB0"  # Replace with your Arduino's port
-HEADERS = ["State  ", "Loop T ", "Total T", "TR0", "TR1", "LED", "TON", "Odd", "BG ", "Ton", "Puf ", "2p ", "CaM "]
+HEADERS = ["Time", "Stat", "LagT", "TR0", "TR1", "S2P", "Lite", "Tone", "Odd", "BG ", "Puff", "2p ", "Camr", "Trial"]
+
 FIELDS = {
     "Trial number": 0,
     "State": "Initial",
@@ -67,7 +69,7 @@ def decodeIncomingData(data):
     Decodes the digital input values from the received data.
     Args: data: The received data as a bytes_array.
     Data contents: ['D', protocolState, digitalValues, millis ]
-    #return [protocol_state, time_elapsed_in_loop, millis_value, digital_values = [tread0, tread1, light, toneCpy, ob_LED, bg_LED, tone, uscope, puff, camera]]
+    #return [protocol_state, time_elapsed_in_loop, millis_value, digital_values = [tread0, tread1, sync2p, light, toneCpy, ob_LED, bg_LED, uscope, puff, camera]]
     """
     numDigitalInputs = 11
     assert( len( data ) >= (IN_DATA_LEN - 1) )
@@ -76,7 +78,7 @@ def decodeIncomingData(data):
     time_elapsed_in_loop = int.from_bytes(data[3:5], byteorder='little')
     millis_value = int.from_bytes(data[5:9], byteorder='little')
     #return "D", digital_values, trial_num, expt_state, protocol_state, time_elapsed_in_loop, millis_value
-    digitalInputs = [protocol_state, time_elapsed_in_loop, millis_value]
+    digitalInputs = [millis_value, protocol_state, time_elapsed_in_loop]
     for i in range(numDigitalInputs):
         digitalInputs.append((digital_values >> i) & 1)
     return digitalInputs
@@ -131,30 +133,33 @@ OddballParms = {
 def draw_table(data, stdscr):
     # Calculate starting row for table based on current data size
     stdscr.addstr(MAX_ROWS, 0, " " * curses.COLS)  # Clear the line above the table
+    xoff = 3
 
     # Print headers
     for i, header in enumerate(HEADERS):
-        if i < 3:
-            stdscr.addstr(1, i * 10, header, curses.A_BOLD)
+        if i == 0:
+            stdscr.addstr(1, i * 8, header, curses.A_BOLD)
         else:
-            stdscr.addstr(1, 15+i*5, header, curses.A_BOLD)
+            stdscr.addstr(1, xoff+i*5, header, curses.A_BOLD)
 
     # Print data rows
     for i, row in enumerate(data[-MAX_ROWS:]):  # Display only the last MAX_ROWS
         for j, val in enumerate(row):
-            if j < 3:  # Shorts
-                stdscr.addstr(i+2, j * 10, str(val).ljust(9))
+            if j == 0:  # Shorts
+                stdscr.addstr(i+2, j * 8, str(val).ljust(9))
+            elif j < 3: #Shorts
+                stdscr.addstr(i+2, xoff+j*5, str(val).ljust(4))
             else:  # Flags
-                stdscr.addstr(i+2, 15+ j * 5, " " * 5)  # Clear the block
+                stdscr.addstr(i+2, xoff + j*5, " " * 5)  # Clear the block
                 if val:
-                    stdscr.addstr(i+2, 15+ j * 5, " " * 5, curses.A_REVERSE)  # Filled block
+                    stdscr.addstr(i+2, xoff + j*5, " " * 4, curses.A_REVERSE)  # Filled block
                 else:
-                    stdscr.addstr(i+2, 15+ j * 5, " " * 5)  # Empty block
+                    stdscr.addstr(i+2, xoff + j*5, " " * 4)  # Empty block
 
-def draw_fields(fields, stdscr):
-    for i, (key, value) in enumerate(fields.items()):
+def draw_fields(stdscr):
+    for i, (key, value) in enumerate(FIELDS.items()):
         stdscr.addstr(MAX_ROWS + 3 + i, 0, f"{key}: {value}")
-    stdscr.addstr(MAX_ROWS+3 + i, 0, "Spacebar to pause, q to quit")
+    stdscr.addstr(MAX_ROWS+3 + i+1, 0, "Spacebar to pause, q to quit")
 
 def draw_full_line( color, stdscr ):
     if color == 0:
@@ -193,7 +198,7 @@ def initArduino( protocolParms ):
     time.sleep(1)
     return arduino
 
-def runTrial( currTrial, stdscr, arduino, fields ):
+def runTrial( currTrial, stdscr, arduino ):
     contents = []
     running = True
     while running:
@@ -210,14 +215,68 @@ def runTrial( currTrial, stdscr, arduino, fields ):
             ret = decodeIncomingData( data )
             contents.append(ret)  # Put in the data
             draw_table( contents, stdscr )
-            fields["Elapsed Time" ] = ret[2]/1000
-            fields["State" ] = ret[1]
-            fields["Status" ] = "Running"
-            draw_fields( fields, stdscr )
+            FIELDS["Elapsed Time" ] = ret[0]/1000
+            FIELDS["State" ] = ret[1]
+            #fields["State" ] = len( contents )
+            #fields["Status" ] = "Running"
+            #fields["Status" ] = ret[-2]
+            draw_fields( stdscr )
             stdscr.refresh()
             #print( ret )
             if ret[-1] == 0:
                 return 0, contents
+
+def runTEC( stdscr, arduino ):
+    numTrials = 5
+    probeTrial = 3
+    trialRet = []
+    for currTrial in range( numTrials ):
+        FIELDS["Trial number"] = currTrial
+        if currTrial == probeTrial:
+            arduinoSend(arduino, paramIdx["PROTOCOL"], SOUNDPROBE )
+        else:
+            arduinoSend(arduino, paramIdx["PROTOCOL"], SOUNDTRACE )
+        arduinoSend(arduino, paramIdx["RUNCONTROL"], START )
+        flag, contents = runTrial( currTrial, stdscr, arduino )
+        if flag == 0: # Ended trial OK
+            trialRet.append( contents )
+            draw_full_line( 1, stdscr )
+            FIELDS["Status" ] = "Running"
+            draw_fields( stdscr )
+            stdscr.refresh()
+        else:
+            FIELDS["Status" ] = "Halted"
+            break;
+    if flag == 0:
+        FIELDS["Status" ] = "Finished"
+    draw_fields( stdscr )
+    stdscr.refresh()
+    return trialRet
+
+def runGap( stdscr, arduino ):
+    numTrials = 2
+    trialRet = []
+    for currTrial in range( numTrials ):
+        oddball = int( np.random.rand() * 4 + 3 )
+        FIELDS["Trial number"] = currTrial
+        arduinoSend(arduino, paramIdx["OBPOS"], 10 + oddball )
+        arduinoSend(arduino, paramIdx["RUNCONTROL"], START )
+        flag, contents = runTrial( currTrial, stdscr, arduino )
+        if flag == 0: # Ended trial OK
+            trialRet.append( contents )
+            draw_full_line( 1, stdscr )
+            FIELDS["Status" ] = "Running"
+            draw_fields( stdscr )
+            stdscr.refresh()
+        else:
+            FIELDS["Status" ] = "Halted"
+            break;
+    if flag == 0:
+        FIELDS["Status" ] = "Finished"
+    draw_fields( stdscr )
+    stdscr.refresh()
+    return trialRet
+
 
 def main():
     ''' This program controls an arduino which performs precise timing for
@@ -231,12 +290,8 @@ def main():
 
     if args.protocol == "oddball":
         protocolParms = OddballParms
-        numTrials = 1
-        probeTrial = -1
     else:
         protocolParms = dict(TECParms)
-        numTrials = 5
-        probeTrial = 3
         if args.protocol == "light":
             protocolParms["PROTOCOL"] = LIGHTTRACE
         if args.protocol == "sound":
@@ -247,41 +302,10 @@ def main():
     arduino = initArduino( protocolParms )
     stdscr = initCurses()
 
-    currTrial = 0
-    trialRet = []
-
-    fields = {
-        "Trial number": 0,
-        "State": "Initial",
-        "Score": 0,
-        "Elapsed Time": 0,
-        "Status": "Ready"
-    }
-
-    arduinoSend(arduino, paramIdx["RUNCONTROL"], START )
-    for currTrial in range( numTrials ):
-        fields["Trial number"] = currTrial
-        flag, contents = runTrial( currTrial, stdscr, arduino, fields )
-        if flag == 0: # Ended trial OK
-            trialRet.append( contents )
-            draw_full_line( 1, stdscr )
-            if currTrial < numTrials:
-                fields["Status" ] = "Running"
-                if currTrial == probeTrial:
-                    arduinoSend(arduino, paramIdx["PROTOCOL"], SOUNDPROBE )
-                else:
-                    arduinoSend(arduino, paramIdx["PROTOCOL"], SOUNDTRACE )
-                #time.sleep( 0.1 )
-                arduinoSend(arduino, paramIdx["RUNCONTROL"], START )
-                #time.sleep( 0.1 )
-            else:
-                fields["Status" ] = "Finished"
-        else:
-            fields["Status" ] = "Halted"
-            break;
-
-    draw_fields( fields, stdscr )
-    stdscr.refresh()
+    if args.protocol == "oddball":
+        trialRet = runGap( stdscr, arduino )
+    else:
+        trialRet = runTEC( stdscr, arduino )
     ############### Go into control mode #################
     running = True
     while running:
