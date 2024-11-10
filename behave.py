@@ -4,6 +4,7 @@ import serial
 import time
 import numpy as np
 import argparse
+import datetime
 
 IN_DATA_LEN = 10 # bytes
 TIMEOUT = 1.1
@@ -17,7 +18,8 @@ FIELDS = {
     "State": "Initial",
     "Score": 0,
     "Elapsed Time": 0,
-    "Status": "Ready"
+    "Status": "Ready",
+    "Protocol": "sound"
 }
 MAX_ROWS = 15
 
@@ -131,8 +133,9 @@ OddballParms = {
 # Curses stuff below
 #########################################################################
 def draw_table(data, stdscr):
-    # Calculate starting row for table based on current data size
-    stdscr.addstr(MAX_ROWS, 0, " " * curses.COLS)  # Clear the line above the table
+    # Clear the line below the data.
+    if len(data) < MAX_ROWS:
+        stdscr.addstr(len(data)+2, 0, " " * curses.COLS)  
     xoff = 3
 
     # Print headers
@@ -143,7 +146,7 @@ def draw_table(data, stdscr):
             stdscr.addstr(1, xoff+i*5, header, curses.A_BOLD)
 
     # Print data rows
-    for i, row in enumerate(data[-MAX_ROWS:]):  # Display only the last MAX_ROWS
+    for i, row in enumerate(data[-MAX_ROWS:]):  # Display most recent MAX_ROWS
         for j, val in enumerate(row):
             if j == 0:  # Shorts
                 stdscr.addstr(i+2, j * 8, str(val).ljust(9))
@@ -158,8 +161,8 @@ def draw_table(data, stdscr):
 
 def draw_fields(stdscr):
     for i, (key, value) in enumerate(FIELDS.items()):
-        stdscr.addstr(MAX_ROWS + 3 + i, 0, f"{key}: {value}")
-    stdscr.addstr(MAX_ROWS+3 + i+1, 0, "Spacebar to pause, q to quit")
+        stdscr.addstr(MAX_ROWS + 4 + i, 0, f"{key}: {value}")
+    stdscr.addstr(MAX_ROWS+4 + i+1, 0, "Spacebar to pause, q to quit")
 
 def draw_full_line( color, stdscr ):
     if color == 0:
@@ -199,17 +202,24 @@ def initArduino( protocolParms ):
     return arduino
 
 def runTrial( currTrial, stdscr, arduino ):
+    global FIELDS
     contents = []
     running = True
+    paused = False
     while running:
         key = stdscr.getch()
         if key == ord('q'):
+            FIELDS["Status" ] = "Halted"
             return 1, contents
         if key == ord(' '):
-            draw_full_line( 2, stdscr )
+            paused = not paused
+            FIELDS["Status"] = "Paused" if paused else "Running"
+            draw_fields( stdscr )
             stdscr.refresh()
             time.sleep( 0.5 )
-            draw_full_line( 0, stdscr )
+            #draw_full_line( 0, stdscr )
+        if paused:
+            continue
         data = arduinoRead(arduino)
         if data:
             ret = decodeIncomingData( data )
@@ -217,30 +227,64 @@ def runTrial( currTrial, stdscr, arduino ):
             draw_table( contents, stdscr )
             FIELDS["Elapsed Time" ] = ret[0]/1000
             FIELDS["State" ] = ret[1]
-            #fields["State" ] = len( contents )
-            #fields["Status" ] = "Running"
-            #fields["Status" ] = ret[-2]
             draw_fields( stdscr )
             stdscr.refresh()
-            #print( ret )
             if ret[-1] == 0:
                 return 0, contents
 
-def runTEC( stdscr, arduino ):
-    numTrials = 5
-    probeTrial = 3
+
+def fillProbes( args ):
+    isProbe = innerFillProbes( args )
+    while sum( isProbe ) != (args.numTrials // args.probeTrialSpacing):
+        isProbe = innerFillProbes( args )
+    return isProbe
+
+def innerFillProbes( args ):
+    lastProbe = 0
+    # numProbes / numAvailSlots
+    numProbes = args.numTrials // args.probeTrialSpacing
+    newProbeProb = numProbes / (args.numTrials - numProbes * args.probeTrialMinSpacing )
+    isProbe = np.zeros( args.numTrials, dtype=int )
+    numActualProbes = 0
+    for ii in range(args.numTrials):
+        if ii > lastProbe+args.probeTrialMinSpacing:
+            if np.random.rand() < newProbeProb and numActualProbes < numProbes:
+                isProbe[ii] = 1
+                lastProbe = ii
+                numActualProbes += 1
+    return isProbe
+
+def runTEC( stdscr, arduino, args ):
+    global FIELDS
+    isProbe = fillProbes( args )
+
     trialRet = []
-    for currTrial in range( numTrials ):
+    for currTrial in range( args.numTrials ):
         FIELDS["Trial number"] = currTrial
-        if currTrial == probeTrial:
-            arduinoSend(arduino, paramIdx["PROTOCOL"], SOUNDPROBE )
+        ptcl = FIELDS["Protocol"]
+        if isProbe[currTrial]:
+            if ptcl == "sound" or (ptcl == "multics" and (currTrial % args.probeTrialGap) == 0):
+                arduinoSend(arduino, paramIdx["PROTOCOL"], SOUNDPROBE )
+            elif FIELDS["Protocol"] == "light" or (ptcl == "multics" and (currTrial % args.probeTrialGap) == 1):
+                arduinoSend(arduino, paramIdx["PROTOCOL"], LIGHTPROBE )
         else:
-            arduinoSend(arduino, paramIdx["PROTOCOL"], SOUNDTRACE )
+            if ptcl == "sound" or (ptcl == "multics" and (currTrial % args.probeTrialGap) == 0):
+                arduinoSend(arduino, paramIdx["PROTOCOL"], SOUNDTRACE )
+            elif ptcl == "light" or (ptcl == "multics" and (currTrial % args.probeTrialGap) == 1):
+                arduinoSend(arduino, paramIdx["PROTOCOL"], LIGHTTRACE )
         arduinoSend(arduino, paramIdx["RUNCONTROL"], START )
         flag, contents = runTrial( currTrial, stdscr, arduino )
         if flag == 0: # Ended trial OK
             trialRet.append( contents )
-            draw_full_line( 1, stdscr )
+            '''
+            contentBlock = len( contents) + 1
+            tc = [[0] * len( HEADERS )] * contentBlock
+            for idx, cc in enumerate( contents ):
+                if (idx+contentBlock) < MAX_ROWS:
+                    tc.append( cc )
+            draw_table( tc, stdscr )
+            '''
+            #draw_full_line( 1, stdscr )
             FIELDS["Status" ] = "Running"
             draw_fields( stdscr )
             stdscr.refresh()
@@ -254,6 +298,7 @@ def runTEC( stdscr, arduino ):
     return trialRet
 
 def runGap( stdscr, arduino ):
+    global FIELDS
     numTrials = 2
     trialRet = []
     for currTrial in range( numTrials ):
@@ -264,7 +309,7 @@ def runGap( stdscr, arduino ):
         flag, contents = runTrial( currTrial, stdscr, arduino )
         if flag == 0: # Ended trial OK
             trialRet.append( contents )
-            draw_full_line( 1, stdscr )
+            #draw_full_line( 1, stdscr )
             FIELDS["Status" ] = "Running"
             draw_fields( stdscr )
             stdscr.refresh()
@@ -279,25 +324,27 @@ def runGap( stdscr, arduino ):
 
 
 def main():
+    global FIELDS
     ''' This program controls an arduino which performs precise timing for
     a mouse behavioural protocol. There is also an ncurses interface to see
     what is going on with the hardware events and the animal's movement.
     '''
     parser = argparse.ArgumentParser( description = 'behave.py: A program to control mouse behaviour on arduino.' )
+    parser.add_argument('-f', '--file', type = str, help = "Optional: Specify output filename. Default: out_yyyymmdd_tt.txt.", default = None )
     parser.add_argument('-p', '--protocol', type = str, help = "Optional: Specify which protocol of light, sound, multics or oddball. Default: sound.", default = "sound" )
+    parser.add_argument('-n', '--numTrials', type = int, help = "Optional: How many trials to run. Default: 60.", default = 60 )
+    parser.add_argument('-ps', '--probeTrialSpacing', type = int, help = "Optional: Mean spacing between as probe trials. Default: 10.", default = 10 )
+    parser.add_argument('-pm', '--probeTrialMinSpacing', type = int, help = "Optional: Minimum number of trials between probe trials. Default: 6.", default = 6 )
     args = parser.parse_args()
 
-
+    FIELDS["Protocol"] = args.protocol
     if args.protocol == "oddball":
         protocolParms = OddballParms
-    else:
+    elif args.protocol in ["light", "sound", "multics"]:
         protocolParms = dict(TECParms)
-        if args.protocol == "light":
-            protocolParms["PROTOCOL"] = LIGHTTRACE
-        if args.protocol == "sound":
-            protocolParms["PROTOCOL"] = SOUNDTRACE
-        if args.protocol == "multics":
-            protocolParms["PROTOCOL"] = MULTITRACE
+    else:
+        print("Behaviour protocol ", args.protocol, " not known. Quitting.")
+        quit()
 
     arduino = initArduino( protocolParms )
     stdscr = initCurses()
@@ -305,7 +352,7 @@ def main():
     if args.protocol == "oddball":
         trialRet = runGap( stdscr, arduino )
     else:
-        trialRet = runTEC( stdscr, arduino )
+        trialRet = runTEC( stdscr, arduino, args )
     ############### Go into control mode #################
     running = True
     while running:
@@ -316,6 +363,23 @@ def main():
 
     ############### Clean up after #################
     curses.endwin()
+
+    now = datetime.datetime.now()
+    # Format the date and time as yyyymmdd_tt
+    date_time_string = now.strftime("%Y%m%d_%H%M")  # %H for 24-hour format
+    filename = args.file if args.file else f"out_{date_time_string}.txt"
+    with open(filename, 'w') as file:
+        file.write( "Trial\tevent" )
+        for hh in HEADERS:
+            file.write( "\t"+hh )
+        for idx, tt in enumerate( trialRet ):   # Go through all trials
+            for idx2, ee in enumerate( tt ):    # Go through all events
+                file.write( "\n"+ str( idx )+ "\t"+ str( idx2 ) )
+                for cc in ee:                   # Go through all fields
+                    file.write( "\t"+ str(cc) )
+        # Write a line to the file
+        file.write("\n")
+        #file.write("This is a line of text.\n")
 
 if __name__ == "__main__":
     main()
